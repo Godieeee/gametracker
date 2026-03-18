@@ -404,7 +404,7 @@ async def top(interaction: discord.Interaction):
 
     medals = ["🥇", "🥈", "🥉"]
     lines = [
-        f"{medals[i] if i < 3 else f'`{i+1}.'}`} **{u}** — {t/60:.1f}h"
+        f"{medals[i] if i < 3 else '`' + str(i+1) + '.'} **{u}** — {t/60:.1f}h"
         for i, (u, t) in enumerate(rows)
     ]
     embed = discord.Embed(title="🏆 Top joueurs du serveur", description="\n".join(lines), color=0x52B043)
