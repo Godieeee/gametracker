@@ -130,8 +130,8 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
     user_id = str(after.id)
     username = after.display_name
 
-    before_games = {a.name for a in before.activities if isinstance(a, discord.Game)}
-    after_games  = {a.name for a in after.activities  if isinstance(a, discord.Game)}
+   before_games = {a.name for a in before.activities if isinstance(a, (discord.Game, discord.Activity))}
+after_games  = {a.name for a in after.activities  if isinstance(a, (discord.Game, discord.Activity))}
 
     started = after_games - before_games
     stopped = before_games - after_games
