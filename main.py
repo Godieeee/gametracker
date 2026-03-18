@@ -11,8 +11,8 @@ from flask import Flask
 from threading import Thread
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
-TOKEN = "MTQ4MzkwMTMxOTA4MDA1NDg0NQ.Gt5Ewg.3NUwujEOFIhCiifT0tc57qIBPPSewivoaY8mFM"           # Token de ton bot Discord
-RAWG_KEY = "TA_CLE_RAWG_ICI"     # Clé API RAWG (gratuite sur rawg.io/apidocs)
+TOKEN = os.getenv("TOKEN")
+RAWG_KEY = os.getenv("RAWG_KEY", "")
 DB_FILE = "gaming_sessions.db"
 
 # ─── FLASK (anti-sleep Replit) ────────────────────────────────────────────────
