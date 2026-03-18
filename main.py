@@ -11,8 +11,8 @@ from flask import Flask
 from threading import Thread
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
-TOKEN = os.getenv("TOKEN")
-RAWG_KEY = os.getenv("RAWG_KEY", "")
+TOKEN = "TON_TOKEN_ICI"           # Token de ton bot Discord
+RAWG_KEY = "TA_CLE_RAWG_ICI"     # Clé API RAWG (gratuite sur rawg.io/apidocs)
 DB_FILE = "gaming_sessions.db"
 
 # ─── FLASK (anti-sleep Replit) ────────────────────────────────────────────────
@@ -130,8 +130,8 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
     user_id = str(after.id)
     username = after.display_name
 
-   before_games = {a.name for a in before.activities if isinstance(a, (discord.Game, discord.Activity))}
-after_games  = {a.name for a in after.activities  if isinstance(a, (discord.Game, discord.Activity))}
+    before_games = {a.name for a in before.activities if isinstance(a, (discord.Game, discord.Activity))}
+    after_games  = {a.name for a in after.activities  if isinstance(a, (discord.Game, discord.Activity))}
 
     started = after_games - before_games
     stopped = before_games - after_games
@@ -403,12 +403,139 @@ async def top(interaction: discord.Interaction):
         return
 
     medals = ["🥇", "🥈", "🥉"]
-    lines = [
-        f"{medals[i] if i < 3 else '`' + str(i+1) + '.'} **{u}** — {t/60:.1f}h"
-        for i, (u, t) in enumerate(rows)
-    ]
+    lines = []
+    for i, (u, t) in enumerate(rows):
+        medal = medals[i] if i < 3 else f"`{i+1}.`"
+        lines.append(f"{medal} **{u}** — {t/60:.1f}h")
     embed = discord.Embed(title="🏆 Top joueurs du serveur", description="\n".join(lines), color=0x52B043)
     await interaction.response.send_message(embed=embed)
+
+# ─── /ajouter_jeu ─────────────────────────────────────────────────────────────
+@tree.command(name="ajouter_jeu", description="Ajoute un jeu manuellement à ta liste")
+@app_commands.describe(nom="Nom du jeu (approximatif OK)")
+async def ajouter_jeu(interaction: discord.Interaction, nom: str):
+    await interaction.response.defer()
+    user_id = str(interaction.user.id)
+
+    rawg_key = os.getenv("RAWG_KEY", "")
+    game_name = nom
+    cover_url = None
+
+    try:
+        url = f"https://api.rawg.io/api/games?key={rawg_key}&search={nom}&page_size=1"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    results = data.get("results", [])
+                    if results:
+                        game_name = results[0]["name"]
+                        cover_url = results[0].get("background_image")
+    except Exception:
+        pass
+
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM game_info WHERE user_id = ? AND LOWER(game) = LOWER(?)", (user_id, game_name))
+    exists = c.fetchone()
+
+    if exists:
+        conn.close()
+        await interaction.followup.send(f"⚠️ **{game_name}** est déjà dans ta liste !", ephemeral=True)
+        return
+
+    c.execute("""
+        INSERT OR IGNORE INTO game_info (user_id, game, first_played, cover_url)
+        VALUES (?, ?, ?, ?)
+    """, (user_id, game_name, datetime.utcnow().isoformat(), cover_url))
+    conn.commit()
+    conn.close()
+
+    embed = discord.Embed(title="✅ Jeu ajouté !", description=f"**{game_name}** a été ajouté à ta liste.", color=0x52B043)
+    if cover_url:
+        embed.set_thumbnail(url=cover_url)
+    embed.set_footer(text="Utilise /ajouter_heures pour ajouter tes heures existantes")
+    await interaction.followup.send(embed=embed)
+
+# ─── /ajouter_heures ──────────────────────────────────────────────────────────
+@tree.command(name="ajouter_heures", description="Ajoute des heures manuellement à un jeu")
+@app_commands.describe(jeu="Nom du jeu", heures="Nombre d'heures à ajouter (ex: 40)")
+async def ajouter_heures(interaction: discord.Interaction, jeu: str, heures: float):
+    await interaction.response.defer()
+    user_id = str(interaction.user.id)
+    username = interaction.user.display_name
+
+    if heures <= 0 or heures > 10000:
+        await interaction.followup.send("❌ Nombre d'heures invalide.", ephemeral=True)
+        return
+
+    minutes = heures * 60
+    rawg_key = os.getenv("RAWG_KEY", "")
+
+    # Cherche le jeu dans game_info
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT game, cover_url FROM game_info WHERE user_id = ? AND LOWER(game) LIKE LOWER(?)", (user_id, f"%{jeu}%"))
+    info = c.fetchone()
+    conn.close()
+
+    if info:
+        game_name, cover_url = info
+    else:
+        # Cherche dans les sessions existantes
+        conn = db()
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT game FROM sessions WHERE user_id = ? AND LOWER(game) LIKE LOWER(?)", (user_id, f"%{jeu}%"))
+        row = c.fetchone()
+        conn.close()
+
+        if row:
+            game_name = row[0]
+            cover_url = None
+        else:
+            # Jeu inconnu : cherche sur RAWG et crée l'entrée
+            game_name = jeu
+            cover_url = None
+            try:
+                url = f"https://api.rawg.io/api/games?key={rawg_key}&search={jeu}&page_size=1"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            results = data.get("results", [])
+                            if results:
+                                game_name = results[0]["name"]
+                                cover_url = results[0].get("background_image")
+            except Exception:
+                pass
+
+            conn = db()
+            c = conn.cursor()
+            c.execute("""
+                INSERT OR IGNORE INTO game_info (user_id, game, first_played, cover_url)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, game_name, datetime.utcnow().isoformat(), cover_url))
+            conn.commit()
+            conn.close()
+
+    # Ajoute la session manuelle
+    now = datetime.utcnow().isoformat()
+    conn = db()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO sessions (user_id, username, game, start_time, end_time, duration_minutes)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (user_id, username, game_name, now, now, minutes))
+    conn.commit()
+    c.execute("SELECT SUM(duration_minutes) FROM sessions WHERE user_id = ? AND game = ?", (user_id, game_name))
+    total = c.fetchone()[0] or 0
+    conn.close()
+
+    embed = discord.Embed(title="✅ Heures ajoutées !", description=f"**+{heures}h** ajoutées à **{game_name}**", color=0x52B043)
+    if cover_url:
+        embed.set_thumbnail(url=cover_url)
+    embed.add_field(name="⏱ Total maintenant", value=f"**{total/60:.1f}h**", inline=True)
+    await interaction.followup.send(embed=embed)
 
 # ─── LANCEMENT ────────────────────────────────────────────────────────────────
 bot.run(TOKEN)
