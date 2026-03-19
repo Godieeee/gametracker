@@ -70,6 +70,19 @@ games = [
     ("A Game About Digging A Hole", 3.4, "2026-01-21T00:00:00", "2026-01-21T00:00:00"),
 ]
 
+# ─── INIT DB ─────────────────────────────────────────────────────────────────
+conn_init = sqlite3.connect(DB_FILE)
+c_init = conn_init.cursor()
+c_init.execute("""CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL, username TEXT NOT NULL, game TEXT NOT NULL,
+    start_time TEXT NOT NULL, end_time TEXT, duration_minutes REAL DEFAULT 0)""")
+c_init.execute("""CREATE TABLE IF NOT EXISTS game_info (
+    user_id TEXT NOT NULL, game TEXT NOT NULL, first_played TEXT NOT NULL,
+    cover_url TEXT, PRIMARY KEY (user_id, game))""")
+conn_init.commit()
+conn_init.close()
+
 # ─── IMPORT ───────────────────────────────────────────────────────────────────
 conn = sqlite3.connect(DB_FILE)
 c = conn.cursor()
