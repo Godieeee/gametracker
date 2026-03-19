@@ -1,14 +1,25 @@
 import sqlite3
 
-# ─── TON USER ID DISCORD ──────────────────────────────────────────────────────
-# Pour trouver ton ID : Discord > Paramètres > Avancé > active Mode développeur
-# Puis clic droit sur ton pseudo > Copier l'identifiant
 USER_ID  = "276789457917575178"
 USERNAME = "Amineeeee"
 DB_FILE  = "gaming_sessions.db"
 
-# ─── TES JEUX (nom, heures, date_debut, date_fin) ────────────────────────────
+# ─── INIT DB ──────────────────────────────────────────────────────────────────
+conn_init = sqlite3.connect(DB_FILE)
+c_init = conn_init.cursor()
+c_init.execute("""CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL, username TEXT NOT NULL, game TEXT NOT NULL,
+    start_time TEXT NOT NULL, end_time TEXT, duration_minutes REAL DEFAULT 0)""")
+c_init.execute("""CREATE TABLE IF NOT EXISTS game_info (
+    user_id TEXT NOT NULL, game TEXT NOT NULL, first_played TEXT NOT NULL,
+    cover_url TEXT, PRIMARY KEY (user_id, game))""")
+conn_init.commit()
+conn_init.close()
+
+# ─── JEUX (nom, heures, date_debut, date_fin) ─────────────────────────────────
 games = [
+    # ── XBOX ──────────────────────────────────────────────────────────────────
     ("EA SPORTS FC 24", 304.0, "2024-08-19T00:00:00", "2025-04-11T00:00:00"),
     ("EA SPORTS FC 25", 93.4, "2025-06-11T00:00:00", "2025-09-29T00:00:00"),
     ("The Witcher 3: Wild Hunt - Complete Edition", 90.7, "2024-10-17T00:00:00", "2024-11-24T00:00:00"),
@@ -68,20 +79,139 @@ games = [
     ("Human Fall Flat", 3.6, "2024-09-04T00:00:00", "2025-08-03T00:00:00"),
     ("BALL x PIT", 3.5, "2025-12-19T00:00:00", "2025-12-28T00:00:00"),
     ("A Game About Digging A Hole", 3.4, "2026-01-21T00:00:00", "2026-01-21T00:00:00"),
+    # ── PS4 ───────────────────────────────────────────────────────────────────
+    ("FIFA 22 (PS4)", 2346.2, "2021-11-05T00:00:00", "2022-09-01T00:00:00"),
+    ("FIFA 23 (PS4)", 368.9, "2023-01-28T00:00:00", "2023-03-28T00:00:00"),
+    ("Genshin Impact (EU) (PS4)", 244.1, "2021-07-12T00:00:00", "2022-03-03T00:00:00"),
+    ("FIFA 21 (PS4)", 190.9, "2021-07-17T00:00:00", "2021-10-06T00:00:00"),
+    ("Red Dead Redemption 2", 100.4, "2021-07-09T00:00:00", "2022-07-24T00:00:00"),
+    ("LEGO DC Super-Villains", 39.3, "2021-12-08T00:00:00", "2022-01-22T00:00:00"),
+    ("Yakuza: Like a Dragon (PS4)", 38.8, "2022-09-09T00:00:00", "2022-12-21T00:00:00"),
+    ("Ghost of Tsushima (PS4)", 37.5, "2022-07-30T00:00:00", "2022-08-16T00:00:00"),
+    ("Fall Guys (EU) (PS4)", 36.0, "2022-06-26T00:00:00", "2022-09-14T00:00:00"),
+    ("DRAGON BALL Z: KAKAROT (PS4)", 35.8, "2023-03-22T00:00:00", "2023-07-09T00:00:00"),
+    ("Naruto Shippuden: Ultimate Ninja Storm 4", 34.3, "2021-11-04T00:00:00", "2022-07-26T00:00:00"),
+    ("The Sims 4 (PS4)", 33.6, "2022-10-28T00:00:00", "2024-03-26T00:00:00"),
+    ("FINAL FANTASY VII REMAKE (PS4)", 29.9, "2022-08-18T00:00:00", "2022-09-04T00:00:00"),
+    ("South Park: The Fractured but Whole", 27.9, "2022-08-14T00:00:00", "2022-08-21T00:00:00"),
+    ("Minecraft Dungeons", 27.8, "2023-03-07T00:00:00", "2023-07-03T00:00:00"),
+    ("Outer Wilds (EU) (PS4)", 24.6, "2023-06-20T00:00:00", "2023-07-04T00:00:00"),
+    ("Call of Duty: Black Ops 4", 24.2, "2021-07-26T00:00:00", "2021-07-28T00:00:00"),
+    ("Kingdoms of Amalur: Re-Reckoning", 23.8, "2021-12-03T00:00:00", "2022-04-21T00:00:00"),
+    ("Uncharted 4: A Thief's End", 23.3, "2021-08-17T00:00:00", "2022-07-08T00:00:00"),
+    ("The Last of Us Remastered", 22.6, "2022-12-17T00:00:00", "2022-12-17T00:00:00"),
+    ("The Evil Within", 21.4, "2023-06-04T00:00:00", "2023-06-07T00:00:00"),
+    ("EA SPORTS UFC 4", 19.1, "2022-02-02T00:00:00", "2022-06-05T00:00:00"),
+    ("Splitgate", 17.8, "2021-07-31T00:00:00", "2021-08-09T00:00:00"),
+    ("Golf With Your Friends", 17.0, "2022-09-02T00:00:00", "2023-07-03T00:00:00"),
+    ("The Elder Scrolls V: Skyrim (PS4)", 16.4, "2022-11-17T00:00:00", "2023-02-10T00:00:00"),
+    ("HITMAN 2", 15.8, "2021-09-08T00:00:00", "2021-09-27T00:00:00"),
+    ("NBA 2K23 (PS4)", 14.8, "2023-06-08T00:00:00", "2023-06-11T00:00:00"),
+    ("WWE 2K22 (PS4)", 14.6, "2023-01-03T00:00:00", "2023-01-04T00:00:00"),
+    ("Inscryption (EU) (PS4)", 14.5, "2023-07-12T00:00:00", "2023-08-06T00:00:00"),
+    ("Marvel's Spider-Man", 14.1, "2022-07-27T00:00:00", "2022-08-12T00:00:00"),
+    ("God of War", 13.8, "2022-06-08T00:00:00", "2022-07-01T00:00:00"),
+    ("Call of Duty: Black Ops Cold War (PS4)", 13.6, "2023-07-17T00:00:00", "2023-07-18T00:00:00"),
+    ("It Takes Two (PS4)", 13.6, "2023-07-19T00:00:00", "2023-07-21T00:00:00"),
+    ("eFootball (PS4)", 13.2, "2022-04-18T00:00:00", "2022-04-20T00:00:00"),
+    ("SpongeBob SquarePants: Battle for Bikini Bottom - Rehydrated", 13.0, "2022-06-05T00:00:00", "2022-06-07T00:00:00"),
+    ("The Quarry (PS4)", 13.0, "2023-03-08T00:00:00", "2023-03-09T00:00:00"),
+    ("Overwatch (PS4)", 12.8, "2022-10-06T00:00:00", "2022-10-11T00:00:00"),
+    ("Rocket League", 11.9, "2021-07-11T00:00:00", "2022-02-11T00:00:00"),
+    ("Human: Fall Flat (PS4)", 10.3, "2022-07-27T00:00:00", "2023-07-19T00:00:00"),
+    ("Until Dawn (PS4)", 10.2, "2023-07-23T00:00:00", "2023-07-23T00:00:00"),
+    ("Horizon Zero Dawn", 10.0, "2022-10-01T00:00:00", "2022-12-17T00:00:00"),
+    ("LEGO Harry Potter: Years 1-4", 9.8, "2022-11-03T00:00:00", "2023-02-11T00:00:00"),
+    ("Tchia (PS4)", 9.4, "2023-03-29T00:00:00", "2023-03-29T00:00:00"),
+    ("DRAGON BALL XENOVERSE 2 (PS4)", 9.3, "2022-09-20T00:00:00", "2022-09-30T00:00:00"),
+    ("Shadow of the Colossus", 8.2, "2022-09-14T00:00:00", "2023-06-19T00:00:00"),
+    ("ARK: Survival Evolved", 8.1, "2022-03-07T00:00:00", "2022-03-07T00:00:00"),
+    ("Celeste", 8.0, "2022-07-30T00:00:00", "2022-08-09T00:00:00"),
+    ("Stray (EU) (PS4)", 7.4, "2022-07-27T00:00:00", "2022-08-08T00:00:00"),
+    ("DRAGON QUEST XI S: Echoes of an Elusive Age", 7.3, "2022-12-20T00:00:00", "2023-01-21T00:00:00"),
+    ("Saints Row IV Re-Elected", 6.2, "2022-11-11T00:00:00", "2022-11-13T00:00:00"),
+    ("Rayman Legends", 5.9, "2022-09-22T00:00:00", "2023-01-14T00:00:00"),
+    ("SOULCALIBUR VI", 5.7, "2022-08-14T00:00:00", "2022-08-14T00:00:00"),
+    ("FINAL FANTASY VII", 5.6, "2022-09-05T00:00:00", "2022-09-05T00:00:00"),
+    ("LEGO Batman 3: Beyond Gotham", 5.2, "2022-08-23T00:00:00", "2022-09-14T00:00:00"),
+    ("DRAGON BALL FighterZ (PS4)", 5.0, "2023-01-19T00:00:00", "2023-03-02T00:00:00"),
+    ("MONOPOLY Plus", 4.9, "2022-09-02T00:00:00", "2022-09-06T00:00:00"),
+    ("Persona 5 Strikers", 4.7, "2022-01-05T00:00:00", "2022-01-05T00:00:00"),
+    ("Grand Theft Auto: Vice City - The Definitive Edition (PS4)", 4.3, "2022-10-18T00:00:00", "2022-11-01T00:00:00"),
+    ("Olympic Games Tokyo 2020 - The Official Video Game", 4.2, "2021-08-24T00:00:00", "2021-09-01T00:00:00"),
+    ("DiRT 5 (PS4)", 4.2, "2022-01-05T00:00:00", "2022-01-07T00:00:00"),
+    ("Paladins", 4.1, "2021-07-15T00:00:00", "2021-07-16T00:00:00"),
+    ("Kena: Bridge of Spirits (PS4)", 3.9, "2023-05-25T00:00:00", "2023-06-08T00:00:00"),
+    ("The Crew 2", 3.7, "2022-07-30T00:00:00", "2022-08-09T00:00:00"),
+    ("STAR WARS Jedi: Fallen Order (EU) (PS4)", 3.5, "2023-01-04T00:00:00", "2023-03-01T00:00:00"),
+    ("AdVenture Capitalist", 3.5, "2023-08-24T00:00:00", "2023-08-24T00:00:00"),
+    ("Tribes of Midgard (PS4)", 3.5, "2022-06-07T00:00:00", "2022-07-03T00:00:00"),
+    ("Borderlands 2", 3.4, "2023-02-11T00:00:00", "2023-02-15T00:00:00"),
+    ("Team Sonic Racing", 3.3, "2021-08-23T00:00:00", "2022-04-17T00:00:00"),
+    ("Pinball Heroes (PS4)", 3.2, "2022-12-21T00:00:00", "2023-03-11T00:00:00"),
+    ("Trackmania (EU) (PS4)", 3.2, "2023-06-07T00:00:00", "2023-07-02T00:00:00"),
+    ("Crash Bandicoot 4: It's About Time (PS4)", 3.1, "2022-07-06T00:00:00", "2022-07-06T00:00:00"),
+    ("F1 2020", 3.1, "2024-02-19T00:00:00", "2024-02-19T00:00:00"),
+    ("Trackmania Turbo", 2.9, "2022-08-01T00:00:00", "2022-09-19T00:00:00"),
+    ("Capcom Arcade Stadium", 2.7, "2022-06-12T00:00:00", "2022-06-13T00:00:00"),
+    ("Prison Architect", 2.7, "2022-09-08T00:00:00", "2022-09-08T00:00:00"),
+    ("Watch_Dogs 2", 2.6, "2022-09-21T00:00:00", "2022-09-21T00:00:00"),
+    ("Mortal Kombat X", 2.5, "2021-10-07T00:00:00", "2021-10-24T00:00:00"),
+    ("The Escapists 2", 2.4, "2022-12-20T00:00:00", "2022-12-20T00:00:00"),
+    ("SUPERHOT", 2.4, "2022-11-02T00:00:00", "2022-11-05T00:00:00"),
+    ("Roblox (PS4)", 2.2, "2024-04-13T00:00:00", "2024-04-13T00:00:00"),
+    ("Nickelodeon All-Star Brawl (PS4)", 2.2, "2022-06-07T00:00:00", "2022-06-07T00:00:00"),
+    ("Virtua Fighter 5: Ultimate Showdown", 2.2, "2021-07-25T00:00:00", "2021-07-29T00:00:00"),
+    ("Hunter's Arena: Legends (PS4)", 2.1, "2021-08-11T00:00:00", "2021-08-12T00:00:00"),
+    ("Devil May Cry 5", 2.1, "2023-03-14T00:00:00", "2023-03-14T00:00:00"),
+    ("MY HERO ULTRA RUMBLE", 2.1, "2023-10-18T00:00:00", "2023-10-18T00:00:00"),
+    ("Rogue Company (PS4)", 2.0, "2021-07-13T00:00:00", "2021-09-25T00:00:00"),
+    ("Hollow Knight Voidheart Edition (EU) (PS4)", 1.75, "2023-03-07T00:00:00", "2023-03-07T00:00:00"),
+    ("Tom Clancy's Rainbow Six Siege (PS4)", 1.73, "2022-11-15T00:00:00", "2022-11-19T00:00:00"),
+    ("Curse of the Dead Gods", 1.62, "2022-05-04T00:00:00", "2022-05-04T00:00:00"),
+    ("Granblue Fantasy: Versus", 1.57, "2022-09-07T00:00:00", "2022-09-07T00:00:00"),
+    ("Wreckfest (PS4)", 1.5, "2023-02-19T00:00:00", "2023-02-19T00:00:00"),
+    ("Deep Rock Galactic (PS4)", 1.38, "2022-01-04T00:00:00", "2022-01-04T00:00:00"),
+    ("Batman: Arkham Knight", 1.1, "2022-11-26T00:00:00", "2022-11-26T00:00:00"),
+    ("Undertale", 1.03, "2023-07-24T00:00:00", "2023-07-24T00:00:00"),
+    ("The Evil Within 2", 1.02, "2023-06-03T00:00:00", "2023-06-03T00:00:00"),
+    ("Mortal Shell (PS4)", 0.85, "2022-02-27T00:00:00", "2022-02-27T00:00:00"),
+    ("Brawlhalla", 0.63, "2021-07-09T00:00:00", "2021-07-09T00:00:00"),
+    ("Knockout City (PS4)", 0.62, "2021-11-06T00:00:00", "2021-11-06T00:00:00"),
+    ("Borderlands 3 (PS4)", 0.58, "2023-03-02T00:00:00", "2023-03-02T00:00:00"),
+    ("Resident Evil 7: Biohazard (PS4)", 0.57, "2023-03-10T00:00:00", "2023-03-18T00:00:00"),
+    ("3on3 FreeStyle (EU) (PS4)", 0.53, "2021-07-31T00:00:00", "2021-07-31T00:00:00"),
+    ("Terraria", 0.53, "2022-08-17T00:00:00", "2022-08-17T00:00:00"),
+    ("INSIDE", 0.52, "2022-10-29T00:00:00", "2022-10-29T00:00:00"),
+    ("I.Q Intelligent Qube (PS4)", 0.52, "2022-12-02T00:00:00", "2022-12-02T00:00:00"),
+    ("Stranded Deep (EU)", 0.42, "2021-08-31T00:00:00", "2021-08-31T00:00:00"),
+    ("ABZU", 0.37, "2022-08-22T00:00:00", "2022-08-22T00:00:00"),
+    ("Detroit: Become Human", 0.27, "2023-01-22T00:00:00", "2023-06-05T00:00:00"),
+    ("Worms W.M.D.", 0.07, "2023-06-04T00:00:00", "2023-06-04T00:00:00"),
+    # ── XBOX SUPPLÉMENTAIRES ──────────────────────────────────────────────────
+    ("UFL", 2.9, "2024-12-11T00:00:00", "2024-12-11T00:00:00"),
+    ("Golf With Your Friends (Xbox)", 2.9, "2025-07-06T00:00:00", "2025-07-06T00:00:00"),
+    ("Gang Beasts", 2.5, "2025-07-26T00:00:00", "2025-07-26T00:00:00"),
+    ("EA SPORTS UFC 5", 2.4, "2025-01-18T00:00:00", "2025-01-18T00:00:00"),
+    ("Hollow Knight: Voidheart Edition", 2.2, "2025-01-02T00:00:00", "2025-01-02T00:00:00"),
+    ("Lies of P", 2.2, "2024-08-28T00:00:00", "2024-08-28T00:00:00"),
+    ("THE FINALS", 2.2, "2024-11-10T00:00:00", "2024-11-10T00:00:00"),
+    ("Jusant", 1.0, "2025-02-16T00:00:00", "2025-02-16T00:00:00"),
+    ("Overwatch", 0.9, "2026-02-19T00:00:00", "2026-02-19T00:00:00"),
+    ("Dragon Ball FighterZ", 0.9, "2025-08-07T00:00:00", "2025-08-07T00:00:00"),
+    ("eFootball", 0.9, "2024-08-19T00:00:00", "2024-08-19T00:00:00"),
+    ("Minecraft Dungeons (Xbox)", 0.8, "2024-12-29T00:00:00", "2024-12-29T00:00:00"),
+    ("Dead Space", 0.8, "2025-02-27T00:00:00", "2025-02-27T00:00:00"),
+    ("Road 96", 0.7, "2025-05-24T00:00:00", "2025-05-24T00:00:00"),
+    ("Totally Reliable Delivery Service", 0.5, "2025-07-22T00:00:00", "2025-07-22T00:00:00"),
+    ("Asphalt Legends Unite", 0.5, "2021-12-12T00:00:00", "2021-12-12T00:00:00"),
+    ("Control: Ultimate Edition", 0.4, "2025-08-25T00:00:00", "2025-08-25T00:00:00"),
+    ("Fall Guys", 0.33, "2024-08-19T00:00:00", "2024-08-19T00:00:00"),
+    ("Aimlabs", 0.27, "2025-08-26T00:00:00", "2025-08-26T00:00:00"),
+    ("Wuchang: Fallen Feathers", 0.23, "2025-07-28T00:00:00", "2025-07-28T00:00:00"),
+    ("MULLET MADJACK", 0.17, "2025-03-13T00:00:00", "2025-03-13T00:00:00"),
+    ("Retro Classics", 0.02, "2025-05-21T00:00:00", "2025-05-21T00:00:00"),
 ]
-
-# ─── INIT DB ─────────────────────────────────────────────────────────────────
-conn_init = sqlite3.connect(DB_FILE)
-c_init = conn_init.cursor()
-c_init.execute("""CREATE TABLE IF NOT EXISTS sessions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL, username TEXT NOT NULL, game TEXT NOT NULL,
-    start_time TEXT NOT NULL, end_time TEXT, duration_minutes REAL DEFAULT 0)""")
-c_init.execute("""CREATE TABLE IF NOT EXISTS game_info (
-    user_id TEXT NOT NULL, game TEXT NOT NULL, first_played TEXT NOT NULL,
-    cover_url TEXT, PRIMARY KEY (user_id, game))""")
-conn_init.commit()
-conn_init.close()
 
 # ─── IMPORT ───────────────────────────────────────────────────────────────────
 conn = sqlite3.connect(DB_FILE)
@@ -91,28 +221,21 @@ skipped  = 0
 
 for game_name, hours, start_time, end_time in games:
     minutes = hours * 60
-
-    # Vérifie si déjà importé
     c.execute("SELECT SUM(duration_minutes) FROM sessions WHERE user_id = ? AND game = ?", (USER_ID, game_name))
     existing = c.fetchone()[0] or 0
     if existing > 0:
         print(f"⏭ Ignoré (déjà {existing/60:.1f}h) : {game_name}")
         skipped += 1
         continue
-
-    # Ajoute la session avec les vraies dates
     c.execute("""
         INSERT INTO sessions (user_id, username, game, start_time, end_time, duration_minutes)
         VALUES (?, ?, ?, ?, ?, ?)
     """, (USER_ID, USERNAME, game_name, start_time, end_time, minutes))
-
-    # Ajoute dans game_info
     c.execute("""
         INSERT OR IGNORE INTO game_info (user_id, game, first_played, cover_url)
         VALUES (?, ?, ?, NULL)
     """, (USER_ID, game_name, start_time))
-
-    print(f"✅ {game_name} ({hours}h) — {start_time[:10]} → {end_time[:10]}")
+    print(f"✅ {game_name} ({hours}h)")
     imported += 1
 
 conn.commit()
