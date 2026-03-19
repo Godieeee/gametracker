@@ -75,9 +75,8 @@ def init_db():
 def db():
     return sqlite3.connect(DB_FILE)
 
-# ─── RAWG : récupère cover + nom exact ────────────────────────────────────────
+# ─── RAWG ─────────────────────────────────────────────────────────────────────
 async def fetch_game_info(query: str):
-    """Retourne (nom_exact, cover_url) depuis RAWG."""
     try:
         url = f"https://api.rawg.io/api/games?key={RAWG_KEY}&search={query}&page_size=1"
         async with aiohttp.ClientSession() as session:
@@ -114,15 +113,10 @@ async def scheduler():
     await bot.wait_until_ready()
     while not bot.is_closed():
         now = datetime.utcnow()
-
-        # Résumé hebdo — chaque dimanche à 20h UTC
         if now.weekday() == 6 and now.hour == 20 and now.minute == 0:
             await send_weekly_summary()
-
-        # Résumé mensuel — chaque 1er du mois à 20h UTC
         if now.day == 1 and now.hour == 20 and now.minute == 0:
             await send_monthly_summary()
-
         await asyncio.sleep(60)
 
 async def send_weekly_summary():
@@ -138,19 +132,12 @@ async def send_weekly_summary():
     c.execute("SELECT SUM(duration_minutes) FROM sessions WHERE start_time >= ?", (since,))
     total = c.fetchone()[0] or 0
     conn.close()
-
     if not rows:
         return
-
-    embed = discord.Embed(
-        title="📅 Résumé de la semaine",
-        description=f"Voilà ce que t'as joué cette semaine !",
-        color=0x52B043
-    )
+    embed = discord.Embed(title="📅 Résumé de la semaine", color=0x52B043)
     embed.add_field(name="⏱ Total", value=f"**{total/60:.1f}h**", inline=False)
     top = "\n".join(f"`{i+1}.` **{r[0]}** — {r[1]/60:.1f}h" for i, r in enumerate(rows))
     embed.add_field(name="🏆 Top jeux", value=top, inline=False)
-
     for guild in bot.guilds:
         for channel in guild.text_channels:
             try:
@@ -160,12 +147,11 @@ async def send_weekly_summary():
                 pass
 
 async def send_monthly_summary():
-    now = datetime.utcnow()
+    now        = datetime.utcnow()
     last_month = (now.replace(day=1) - timedelta(days=1))
     month_start = last_month.replace(day=1, hour=0, minute=0, second=0).isoformat()
     month_end   = now.replace(day=1, hour=0, minute=0, second=0).isoformat()
     mois_nom    = last_month.strftime("%B %Y")
-
     conn = db()
     c = conn.cursor()
     c.execute("""
@@ -177,13 +163,10 @@ async def send_monthly_summary():
     """, (month_start, month_end))
     rows = c.fetchall()
     conn.close()
-
     if not rows:
         return
-
     top_game, top_time, cover_url = rows[0]
     total_mois = sum(r[1] for r in rows)
-
     embed = discord.Embed(
         title=f"📊 Résumé de {mois_nom}",
         description=f"🏆 Jeu du mois : **{top_game}** avec **{top_time/60:.1f}h** !",
@@ -196,7 +179,6 @@ async def send_monthly_summary():
     if len(rows) > 1:
         autres = "\n".join(f"`{i+2}.` **{r[0]}** — {r[1]/60:.1f}h" for i, r in enumerate(rows[1:]))
         embed.add_field(name="Autres jeux", value=autres, inline=False)
-
     for guild in bot.guilds:
         for channel in guild.text_channels:
             try:
@@ -236,7 +218,6 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
         print(f"🎮 {username} lance {game}")
         asyncio.ensure_future(register_first_play(user_id, username, game))
 
-        # Annonce dans le channel précis
         if ANNOUNCE_ID:
             channel = bot.get_channel(ANNOUNCE_ID)
             if channel:
@@ -245,7 +226,6 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
                 c2.execute("SELECT cover_url FROM game_info WHERE user_id = ? AND game = ?", (user_id, game))
                 info = c2.fetchone()
                 conn2.close()
-
                 embed = discord.Embed(
                     title="🎮 En train de jouer",
                     description=f"**{username}** vient de lancer **{game}** !",
@@ -282,7 +262,6 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
 async def stats(interaction: discord.Interaction, membre: discord.Member = None):
     target  = membre or interaction.user
     user_id = str(target.id)
-
     conn = db()
     c = conn.cursor()
     c.execute("""
@@ -302,15 +281,12 @@ async def stats(interaction: discord.Interaction, membre: discord.Member = None)
         return
 
     embed = discord.Embed(title=f"🎮 Stats de {target.display_name}", color=0x52B043)
-
     if rows and rows[0][3]:
         embed.set_thumbnail(url=rows[0][3])
-
     if active:
         game, start_str = active
         elapsed = (datetime.utcnow() - datetime.fromisoformat(start_str)).total_seconds() / 60
         embed.add_field(name="🟢 En train de jouer", value=f"**{game}** — {elapsed:.0f} min", inline=False)
-
     if rows:
         total_all = sum(r[1] for r in rows)
         embed.add_field(name="⏱ Temps total", value=f"**{total_all/60:.1f}h**", inline=True)
@@ -320,7 +296,6 @@ async def stats(interaction: discord.Interaction, membre: discord.Member = None)
             first = f" *(depuis le {datetime.fromisoformat(first_played).strftime('%d/%m/%Y')})*" if first_played else ""
             top_lines.append(f"`{i+1}.` **{game}** — {total/60:.1f}h{first}")
         embed.add_field(name="🏆 Top jeux", value="\n".join(top_lines), inline=False)
-
     await interaction.response.send_message(embed=embed)
 
 # ─── /jeu ─────────────────────────────────────────────────────────────────────
@@ -329,7 +304,6 @@ async def stats(interaction: discord.Interaction, membre: discord.Member = None)
 async def jeu(interaction: discord.Interaction, nom: str, membre: discord.Member = None):
     target  = membre or interaction.user
     user_id = str(target.id)
-
     conn = db()
     c = conn.cursor()
     c.execute("""
@@ -343,16 +317,13 @@ async def jeu(interaction: discord.Interaction, nom: str, membre: discord.Member
     """, (user_id, f"%{nom}%"))
     info = c.fetchone()
     conn.close()
-
     if not row or not row[0]:
         await interaction.response.send_message(f"❌ Aucune session trouvée pour **{nom}**.", ephemeral=True)
         return
-
     total_min, nb_sessions = row
     game_name    = info[0] if info else nom
     first_played = info[1] if info else None
     cover_url    = info[2] if info else None
-
     embed = discord.Embed(title=f"🎮 {game_name}", color=0x52B043)
     if cover_url:
         embed.set_image(url=cover_url)
@@ -368,28 +339,23 @@ async def jeu(interaction: discord.Interaction, nom: str, membre: discord.Member
 async def ajouter_jeu(interaction: discord.Interaction, nom: str):
     await interaction.response.defer()
     user_id = str(interaction.user.id)
-
     game_name, cover_url = await fetch_game_info(nom)
-
     conn = db()
     c = conn.cursor()
     c.execute("SELECT 1 FROM game_info WHERE user_id = ? AND LOWER(game) = LOWER(?)", (user_id, game_name))
     exists = c.fetchone()
     conn.close()
-
     if exists:
         await interaction.followup.send(f"⚠️ **{game_name}** est déjà dans ta liste !", ephemeral=True)
         return
-
-    c2 = db()
-    cur = c2.cursor()
-    cur.execute("""
+    conn = db()
+    c = conn.cursor()
+    c.execute("""
         INSERT OR IGNORE INTO game_info (user_id, game, first_played, cover_url)
         VALUES (?, ?, ?, ?)
     """, (user_id, game_name, datetime.utcnow().isoformat(), cover_url))
-    c2.commit()
-    c2.close()
-
+    conn.commit()
+    conn.close()
     embed = discord.Embed(title="✅ Jeu ajouté !", description=f"**{game_name}** a été ajouté à ta liste.", color=0x52B043)
     if cover_url:
         embed.set_thumbnail(url=cover_url)
@@ -419,7 +385,6 @@ class ConfirmView(discord.ui.View):
         c.execute("SELECT SUM(duration_minutes) FROM sessions WHERE user_id = ? AND game = ?", (self.user_id, self.game_name))
         total = c.fetchone()[0] or 0
         conn.close()
-
         embed = discord.Embed(
             title="✅ Heures ajoutées !",
             description=f"**+{self.minutes/60:.1f}h** ajoutées à **{self.game_name}**",
@@ -445,20 +410,15 @@ async def ajouter_heures(interaction: discord.Interaction, jeu: str, heures: flo
     await interaction.response.defer()
     user_id  = str(interaction.user.id)
     username = interaction.user.display_name
-
     if heures <= 0 or heures > 10000:
         await interaction.followup.send("❌ Nombre d'heures invalide.", ephemeral=True)
         return
-
     minutes = heures * 60
-
-    # Cherche le jeu dans game_info puis sessions puis RAWG
     conn = db()
     c = conn.cursor()
     c.execute("SELECT game, cover_url FROM game_info WHERE user_id = ? AND LOWER(game) LIKE LOWER(?)", (user_id, f"%{jeu}%"))
     info = c.fetchone()
     conn.close()
-
     if info:
         game_name, cover_url = info
     else:
@@ -480,8 +440,6 @@ async def ajouter_heures(interaction: discord.Interaction, jeu: str, heures: flo
             """, (user_id, game_name, datetime.utcnow().isoformat(), cover_url))
             conn.commit()
             conn.close()
-
-    # Message de confirmation avec boutons
     embed = discord.Embed(
         title="❓ Confirmation",
         description=f"Tu veux ajouter **{heures}h** à ce jeu ?\n\n🎮 **{game_name}**",
@@ -489,7 +447,6 @@ async def ajouter_heures(interaction: discord.Interaction, jeu: str, heures: flo
     )
     if cover_url:
         embed.set_thumbnail(url=cover_url)
-
     view = ConfirmView(user_id, username, game_name, cover_url, minutes)
     await interaction.followup.send(embed=embed, view=view)
 
@@ -509,7 +466,6 @@ class ConfirmDeleteView(discord.ui.View):
         c.execute("DELETE FROM active_sessions WHERE user_id = ? AND game = ?", (self.user_id, self.game_name))
         conn.commit()
         conn.close()
-
         embed = discord.Embed(
             title="🗑️ Jeu supprimé",
             description=f"**{self.game_name}** et toutes ses heures ont été supprimés.",
@@ -526,7 +482,6 @@ class ConfirmDeleteView(discord.ui.View):
 @app_commands.describe(nom="Nom du jeu à supprimer")
 async def supprimer_jeu(interaction: discord.Interaction, nom: str):
     user_id = str(interaction.user.id)
-
     conn = db()
     c = conn.cursor()
     c.execute("SELECT game FROM game_info WHERE user_id = ? AND LOWER(game) LIKE LOWER(?)", (user_id, f"%{nom}%"))
@@ -535,11 +490,9 @@ async def supprimer_jeu(interaction: discord.Interaction, nom: str):
         c.execute("SELECT DISTINCT game FROM sessions WHERE user_id = ? AND LOWER(game) LIKE LOWER(?)", (user_id, f"%{nom}%"))
         info = c.fetchone()
     conn.close()
-
     if not info:
         await interaction.response.send_message(f"❌ Aucun jeu trouvé pour **{nom}**.", ephemeral=True)
         return
-
     game_name = info[0]
     embed = discord.Embed(
         title="⚠️ Confirmation suppression",
@@ -550,4 +503,6 @@ async def supprimer_jeu(interaction: discord.Interaction, nom: str):
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # ─── LANCEMENT ────────────────────────────────────────────────────────────────
+import import_games
 bot.run(TOKEN)
+
