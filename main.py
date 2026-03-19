@@ -11,11 +11,12 @@ from flask import Flask
 from threading import Thread
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
-TOKEN = os.getenv("TOKEN")
-RAWG_KEY = os.getenv("RAWG_KEY", "")
-DB_FILE = "gaming_sessions.db"
+TOKEN        = os.getenv("TOKEN")
+RAWG_KEY     = os.getenv("RAWG_KEY", "")
+ANNOUNCE_ID  = int(os.getenv("ANNOUNCE_CHANNEL_ID", "0"))  # Channel annonce jeu en cours
+DB_FILE      = "gaming_sessions.db"
 
-# ─── FLASK (anti-sleep Replit) ────────────────────────────────────────────────
+# ─── FLASK (anti-sleep) ───────────────────────────────────────────────────────
 app = Flask('')
 
 @app.route('/')
@@ -40,8 +41,6 @@ tree = bot.tree
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-
-    # Sessions terminées
     c.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,8 +52,6 @@ def init_db():
             duration_minutes REAL DEFAULT 0
         )
     """)
-
-    # Sessions en cours
     c.execute("""
         CREATE TABLE IF NOT EXISTS active_sessions (
             user_id TEXT PRIMARY KEY,
@@ -63,8 +60,6 @@ def init_db():
             start_time TEXT NOT NULL
         )
     """)
-
-    # Infos jeux (cover + première fois)
     c.execute("""
         CREATE TABLE IF NOT EXISTS game_info (
             user_id TEXT NOT NULL,
@@ -74,39 +69,37 @@ def init_db():
             PRIMARY KEY (user_id, game)
         )
     """)
-
     conn.commit()
     conn.close()
 
 def db():
     return sqlite3.connect(DB_FILE)
 
-# ─── SCRAPING COVER (RAWG) ────────────────────────────────────────────────────
-async def fetch_cover(game_name: str) -> str | None:
-    """Récupère la cover d'un jeu via l'API RAWG (gratuite)."""
+# ─── RAWG : récupère cover + nom exact ────────────────────────────────────────
+async def fetch_game_info(query: str):
+    """Retourne (nom_exact, cover_url) depuis RAWG."""
     try:
-        url = f"https://api.rawg.io/api/games?key={RAWG_KEY}&search={game_name}&page_size=1"
+        url = f"https://api.rawg.io/api/games?key={RAWG_KEY}&search={query}&page_size=1"
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     results = data.get("results", [])
                     if results:
-                        return results[0].get("background_image")
+                        return results[0]["name"], results[0].get("background_image")
     except Exception:
         pass
-    return None
+    return query, None
 
-# ─── ENREGISTREMENT PREMIÈRE FOIS + COVER ─────────────────────────────────────
+# ─── ENREGISTREMENT PREMIÈRE FOIS ─────────────────────────────────────────────
 async def register_first_play(user_id: str, username: str, game: str):
     conn = db()
     c = conn.cursor()
     c.execute("SELECT 1 FROM game_info WHERE user_id = ? AND game = ?", (user_id, game))
     exists = c.fetchone()
     conn.close()
-
     if not exists:
-        cover = await fetch_cover(game)
+        _, cover = await fetch_game_info(game)
         conn = db()
         c = conn.cursor()
         c.execute("""
@@ -115,19 +108,115 @@ async def register_first_play(user_id: str, username: str, game: str):
         """, (user_id, game, datetime.utcnow().isoformat(), cover))
         conn.commit()
         conn.close()
-        print(f"🆕 Première fois : {username} joue à {game} | Cover: {'✅' if cover else '❌'}")
+
+# ─── TÂCHES PLANIFIÉES ────────────────────────────────────────────────────────
+async def scheduler():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = datetime.utcnow()
+
+        # Résumé hebdo — chaque dimanche à 20h UTC
+        if now.weekday() == 6 and now.hour == 20 and now.minute == 0:
+            await send_weekly_summary()
+
+        # Résumé mensuel — chaque 1er du mois à 20h UTC
+        if now.day == 1 and now.hour == 20 and now.minute == 0:
+            await send_monthly_summary()
+
+        await asyncio.sleep(60)
+
+async def send_weekly_summary():
+    since = (datetime.utcnow() - timedelta(days=7)).isoformat()
+    conn = db()
+    c = conn.cursor()
+    c.execute("""
+        SELECT game, SUM(duration_minutes) as total
+        FROM sessions WHERE start_time >= ?
+        GROUP BY game ORDER BY total DESC LIMIT 5
+    """, (since,))
+    rows = c.fetchall()
+    c.execute("SELECT SUM(duration_minutes) FROM sessions WHERE start_time >= ?", (since,))
+    total = c.fetchone()[0] or 0
+    conn.close()
+
+    if not rows:
+        return
+
+    embed = discord.Embed(
+        title="📅 Résumé de la semaine",
+        description=f"Voilà ce que t'as joué cette semaine !",
+        color=0x52B043
+    )
+    embed.add_field(name="⏱ Total", value=f"**{total/60:.1f}h**", inline=False)
+    top = "\n".join(f"`{i+1}.` **{r[0]}** — {r[1]/60:.1f}h" for i, r in enumerate(rows))
+    embed.add_field(name="🏆 Top jeux", value=top, inline=False)
+
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            try:
+                await channel.send(embed=embed)
+                break
+            except Exception:
+                pass
+
+async def send_monthly_summary():
+    now = datetime.utcnow()
+    last_month = (now.replace(day=1) - timedelta(days=1))
+    month_start = last_month.replace(day=1, hour=0, minute=0, second=0).isoformat()
+    month_end   = now.replace(day=1, hour=0, minute=0, second=0).isoformat()
+    mois_nom    = last_month.strftime("%B %Y")
+
+    conn = db()
+    c = conn.cursor()
+    c.execute("""
+        SELECT s.game, SUM(s.duration_minutes) as total, gi.cover_url
+        FROM sessions s
+        LEFT JOIN game_info gi ON gi.user_id = s.user_id AND gi.game = s.game
+        WHERE s.start_time >= ? AND s.start_time < ?
+        GROUP BY s.game ORDER BY total DESC LIMIT 5
+    """, (month_start, month_end))
+    rows = c.fetchall()
+    conn.close()
+
+    if not rows:
+        return
+
+    top_game, top_time, cover_url = rows[0]
+    total_mois = sum(r[1] for r in rows)
+
+    embed = discord.Embed(
+        title=f"📊 Résumé de {mois_nom}",
+        description=f"🏆 Jeu du mois : **{top_game}** avec **{top_time/60:.1f}h** !",
+        color=0x52B043
+    )
+    if cover_url:
+        embed.set_thumbnail(url=cover_url)
+    embed.add_field(name="⏱ Total", value=f"**{total_mois/60:.1f}h**", inline=True)
+    embed.add_field(name="🎮 Jeux joués", value=f"**{len(rows)}**", inline=True)
+    if len(rows) > 1:
+        autres = "\n".join(f"`{i+2}.` **{r[0]}** — {r[1]/60:.1f}h" for i, r in enumerate(rows[1:]))
+        embed.add_field(name="Autres jeux", value=autres, inline=False)
+
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            try:
+                await channel.send(embed=embed)
+                break
+            except Exception:
+                pass
 
 # ─── DÉTECTION ACTIVITÉ ───────────────────────────────────────────────────────
 @bot.event
 async def on_ready():
     init_db()
     await tree.sync()
+    bot.loop.create_task(scheduler())
     print(f"✅ Bot connecté : {bot.user}")
     print("📡 Surveillance des activités activée")
 
 @bot.event
 async def on_presence_update(before: discord.Member, after: discord.Member):
-    user_id = str(after.id)
+    user_id  = str(after.id)
     username = after.display_name
 
     before_games = {a.name for a in before.activities if isinstance(a, (discord.Game, discord.Activity))}
@@ -147,6 +236,29 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
         print(f"🎮 {username} lance {game}")
         asyncio.ensure_future(register_first_play(user_id, username, game))
 
+        # Annonce dans le channel précis
+        if ANNOUNCE_ID:
+            channel = bot.get_channel(ANNOUNCE_ID)
+            if channel:
+                conn2 = db()
+                c2 = conn2.cursor()
+                c2.execute("SELECT cover_url FROM game_info WHERE user_id = ? AND game = ?", (user_id, game))
+                info = c2.fetchone()
+                conn2.close()
+
+                embed = discord.Embed(
+                    title="🎮 En train de jouer",
+                    description=f"**{username}** vient de lancer **{game}** !",
+                    color=0x52B043
+                )
+                if info and info[0]:
+                    embed.set_thumbnail(url=info[0])
+                embed.timestamp = datetime.utcnow()
+                try:
+                    await channel.send(embed=embed)
+                except Exception:
+                    pass
+
     for game in stopped:
         c.execute("SELECT start_time FROM active_sessions WHERE user_id = ? AND game = ?", (user_id, game))
         row = c.fetchone()
@@ -154,7 +266,6 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
             start    = datetime.fromisoformat(row[0])
             end      = datetime.utcnow()
             duration = (end - start).total_seconds() / 60
-
             c.execute("""
                 INSERT INTO sessions (user_id, username, game, start_time, end_time, duration_minutes)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -169,22 +280,19 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
 @tree.command(name="stats", description="Tes statistiques de jeu")
 @app_commands.describe(membre="Membre (laisse vide = toi)")
 async def stats(interaction: discord.Interaction, membre: discord.Member = None):
-    target = membre or interaction.user
+    target  = membre or interaction.user
     user_id = str(target.id)
 
     conn = db()
     c = conn.cursor()
-
     c.execute("""
-        SELECT s.game, SUM(s.duration_minutes) as total,
-               gi.first_played, gi.cover_url
+        SELECT s.game, SUM(s.duration_minutes) as total, gi.first_played, gi.cover_url
         FROM sessions s
         LEFT JOIN game_info gi ON gi.user_id = s.user_id AND gi.game = s.game
         WHERE s.user_id = ?
         GROUP BY s.game ORDER BY total DESC
     """, (user_id,))
     rows = c.fetchall()
-
     c.execute("SELECT game, start_time FROM active_sessions WHERE user_id = ?", (user_id,))
     active = c.fetchone()
     conn.close()
@@ -193,17 +301,10 @@ async def stats(interaction: discord.Interaction, membre: discord.Member = None)
         await interaction.response.send_message(f"❌ Aucune session pour **{target.display_name}**.", ephemeral=True)
         return
 
-    # Prend la cover du jeu le plus joué
-    cover_url = None
-    top_game = None
-    if rows:
-        top_game = rows[0][0]
-        cover_url = rows[0][3]
-
     embed = discord.Embed(title=f"🎮 Stats de {target.display_name}", color=0x52B043)
 
-    if cover_url:
-        embed.set_thumbnail(url=cover_url)
+    if rows and rows[0][3]:
+        embed.set_thumbnail(url=rows[0][3])
 
     if active:
         game, start_str = active
@@ -214,15 +315,10 @@ async def stats(interaction: discord.Interaction, membre: discord.Member = None)
         total_all = sum(r[1] for r in rows)
         embed.add_field(name="⏱ Temps total", value=f"**{total_all/60:.1f}h**", inline=True)
         embed.add_field(name="🎯 Jeux différents", value=f"**{len(rows)}**", inline=True)
-
         top_lines = []
-        for i, (game, total, first_played, _) in enumerate(rows[:6]):
-            first = ""
-            if first_played:
-                d = datetime.fromisoformat(first_played).strftime("%d/%m/%Y")
-                first = f" *(depuis le {d})*"
+        for i, (game, total, first_played, _) in enumerate(rows[:8]):
+            first = f" *(depuis le {datetime.fromisoformat(first_played).strftime('%d/%m/%Y')})*" if first_played else ""
             top_lines.append(f"`{i+1}.` **{game}** — {total/60:.1f}h{first}")
-
         embed.add_field(name="🏆 Top jeux", value="\n".join(top_lines), inline=False)
 
     await interaction.response.send_message(embed=embed)
@@ -231,7 +327,7 @@ async def stats(interaction: discord.Interaction, membre: discord.Member = None)
 @tree.command(name="jeu", description="Détails sur un jeu spécifique")
 @app_commands.describe(nom="Nom du jeu", membre="Membre (laisse vide = toi)")
 async def jeu(interaction: discord.Interaction, nom: str, membre: discord.Member = None):
-    target = membre or interaction.user
+    target  = membre or interaction.user
     user_id = str(target.id)
 
     conn = db()
@@ -241,7 +337,6 @@ async def jeu(interaction: discord.Interaction, nom: str, membre: discord.Member
         WHERE user_id = ? AND LOWER(game) LIKE LOWER(?)
     """, (user_id, f"%{nom}%"))
     row = c.fetchone()
-
     c.execute("""
         SELECT game, first_played, cover_url FROM game_info
         WHERE user_id = ? AND LOWER(game) LIKE LOWER(?)
@@ -254,160 +349,17 @@ async def jeu(interaction: discord.Interaction, nom: str, membre: discord.Member
         return
 
     total_min, nb_sessions = row
-    game_name = info[0] if info else nom
+    game_name    = info[0] if info else nom
     first_played = info[1] if info else None
-    cover_url = info[2] if info else None
+    cover_url    = info[2] if info else None
 
     embed = discord.Embed(title=f"🎮 {game_name}", color=0x52B043)
     if cover_url:
         embed.set_image(url=cover_url)
-
     embed.add_field(name="⏱ Temps total", value=f"**{total_min/60:.1f}h** ({total_min:.0f} min)", inline=True)
     embed.add_field(name="🔁 Sessions", value=f"**{nb_sessions}**", inline=True)
     if first_played:
-        d = datetime.fromisoformat(first_played).strftime("%d/%m/%Y à %H:%M")
-        embed.add_field(name="🆕 Première fois", value=f"**{d}**", inline=False)
-
-    await interaction.response.send_message(embed=embed)
-
-# ─── /mois ────────────────────────────────────────────────────────────────────
-@tree.command(name="mois", description="Jeu le plus joué ce mois + résumé mensuel")
-@app_commands.describe(membre="Membre (laisse vide = toi)")
-async def mois(interaction: discord.Interaction, membre: discord.Member = None):
-    target = membre or interaction.user
-    user_id = str(target.id)
-
-    now = datetime.utcnow()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0).isoformat()
-
-    conn = db()
-    c = conn.cursor()
-    c.execute("""
-        SELECT s.game, SUM(s.duration_minutes) as total, gi.cover_url
-        FROM sessions s
-        LEFT JOIN game_info gi ON gi.user_id = s.user_id AND gi.game = s.game
-        WHERE s.user_id = ? AND s.start_time >= ?
-        GROUP BY s.game ORDER BY total DESC
-    """, (user_id, month_start))
-    rows = c.fetchall()
-    conn.close()
-
-    if not rows:
-        await interaction.response.send_message("❌ Aucune session ce mois-ci.", ephemeral=True)
-        return
-
-    mois_nom = now.strftime("%B %Y")
-    top_game, top_time, cover_url = rows[0]
-    total_mois = sum(r[1] for r in rows)
-
-    embed = discord.Embed(
-        title=f"📊 Résumé de {mois_nom}",
-        description=f"🏆 Jeu du mois : **{top_game}** avec **{top_time/60:.1f}h** !",
-        color=0x52B043
-    )
-    if cover_url:
-        embed.set_thumbnail(url=cover_url)
-
-    embed.add_field(name="⏱ Total ce mois", value=f"**{total_mois/60:.1f}h**", inline=True)
-    embed.add_field(name="🎯 Jeux joués", value=f"**{len(rows)}**", inline=True)
-
-    if len(rows) > 1:
-        autres = "\n".join(f"`{i+2}.` **{r[0]}** — {r[1]/60:.1f}h" for i, r in enumerate(rows[1:5]))
-        embed.add_field(name="Autres jeux", value=autres, inline=False)
-
-    await interaction.response.send_message(embed=embed)
-
-# ─── /semaine ─────────────────────────────────────────────────────────────────
-@tree.command(name="semaine", description="Graphique de ta semaine de jeu")
-@app_commands.describe(membre="Membre (laisse vide = toi)")
-async def semaine(interaction: discord.Interaction, membre: discord.Member = None):
-    target = membre or interaction.user
-    user_id = str(target.id)
-
-    conn = db()
-    c = conn.cursor()
-    days_data = []
-    for i in range(6, -1, -1):
-        day = datetime.utcnow() - timedelta(days=i)
-        day_start = day.replace(hour=0, minute=0, second=0).isoformat()
-        day_end   = day.replace(hour=23, minute=59, second=59).isoformat()
-        c.execute("""
-            SELECT SUM(duration_minutes) FROM sessions
-            WHERE user_id = ? AND start_time >= ? AND start_time <= ?
-        """, (user_id, day_start, day_end))
-        total = c.fetchone()[0] or 0
-        days_data.append((day.strftime("%a %d/%m"), total))
-    conn.close()
-
-    max_val = max(d[1] for d in days_data) or 1
-    bars = []
-    for day_name, minutes in days_data:
-        bar_len = int((minutes / max_val) * 12)
-        bar = "█" * bar_len + "░" * (12 - bar_len)
-        bars.append(f"`{day_name}` {bar} **{minutes/60:.1f}h**")
-
-    embed = discord.Embed(title=f"📅 Semaine de {target.display_name}", color=0x52B043)
-    embed.description = "\n".join(bars)
-    total_week = sum(d[1] for d in days_data)
-    embed.set_footer(text=f"Total semaine : {total_week/60:.1f}h")
-
-    await interaction.response.send_message(embed=embed)
-
-# ─── /historique ──────────────────────────────────────────────────────────────
-@tree.command(name="historique", description="Tes dernières sessions")
-@app_commands.describe(jours="Nombre de jours (défaut: 7)", membre="Membre (laisse vide = toi)")
-async def historique(interaction: discord.Interaction, jours: int = 7, membre: discord.Member = None):
-    target = membre or interaction.user
-    user_id = str(target.id)
-    since = (datetime.utcnow() - timedelta(days=jours)).isoformat()
-
-    conn = db()
-    c = conn.cursor()
-    c.execute("""
-        SELECT game, start_time, duration_minutes FROM sessions
-        WHERE user_id = ? AND start_time >= ?
-        ORDER BY start_time DESC LIMIT 15
-    """, (user_id, since))
-    rows = c.fetchall()
-    conn.close()
-
-    if not rows:
-        await interaction.response.send_message(f"❌ Aucune session dans les {jours} derniers jours.", ephemeral=True)
-        return
-
-    lines = []
-    for game, start_str, duration in rows:
-        date_str = datetime.fromisoformat(start_str).strftime("%d/%m %H:%M")
-        lines.append(f"`{date_str}` **{game}** — {duration/60:.1f}h")
-
-    embed = discord.Embed(title=f"📅 Historique {jours}j — {target.display_name}", color=0x52B043)
-    embed.description = "\n".join(lines)
-    embed.set_footer(text=f"Total : {sum(r[2] for r in rows)/60:.1f}h")
-
-    await interaction.response.send_message(embed=embed)
-
-# ─── /top ─────────────────────────────────────────────────────────────────────
-@tree.command(name="top", description="Classement des joueurs du serveur")
-async def top(interaction: discord.Interaction):
-    conn = db()
-    c = conn.cursor()
-    c.execute("""
-        SELECT username, SUM(duration_minutes) as total
-        FROM sessions GROUP BY user_id ORDER BY total DESC LIMIT 10
-    """)
-    rows = c.fetchall()
-    conn.close()
-
-    if not rows:
-        await interaction.response.send_message("❌ Aucune donnée.", ephemeral=True)
-        return
-
-    medals = ["🥇", "🥈", "🥉"]
-    lines = []
-    for i, (u, t) in enumerate(rows):
-        medal = medals[i] if i < 3 else f"`{i+1}.`"
-        lines.append(f"{medal} **{u}** — {t/60:.1f}h")
-    embed = discord.Embed(title="🏆 Top joueurs du serveur", description="\n".join(lines), color=0x52B043)
+        embed.add_field(name="🆕 Première fois", value=f"**{datetime.fromisoformat(first_played).strftime('%d/%m/%Y à %H:%M')}**", inline=False)
     await interaction.response.send_message(embed=embed)
 
 # ─── /ajouter_jeu ─────────────────────────────────────────────────────────────
@@ -417,39 +369,26 @@ async def ajouter_jeu(interaction: discord.Interaction, nom: str):
     await interaction.response.defer()
     user_id = str(interaction.user.id)
 
-    rawg_key = os.getenv("RAWG_KEY", "")
-    game_name = nom
-    cover_url = None
-
-    try:
-        url = f"https://api.rawg.io/api/games?key={rawg_key}&search={nom}&page_size=1"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    results = data.get("results", [])
-                    if results:
-                        game_name = results[0]["name"]
-                        cover_url = results[0].get("background_image")
-    except Exception:
-        pass
+    game_name, cover_url = await fetch_game_info(nom)
 
     conn = db()
     c = conn.cursor()
     c.execute("SELECT 1 FROM game_info WHERE user_id = ? AND LOWER(game) = LOWER(?)", (user_id, game_name))
     exists = c.fetchone()
+    conn.close()
 
     if exists:
-        conn.close()
         await interaction.followup.send(f"⚠️ **{game_name}** est déjà dans ta liste !", ephemeral=True)
         return
 
-    c.execute("""
+    c2 = db()
+    cur = c2.cursor()
+    cur.execute("""
         INSERT OR IGNORE INTO game_info (user_id, game, first_played, cover_url)
         VALUES (?, ?, ?, ?)
     """, (user_id, game_name, datetime.utcnow().isoformat(), cover_url))
-    conn.commit()
-    conn.close()
+    c2.commit()
+    c2.close()
 
     embed = discord.Embed(title="✅ Jeu ajouté !", description=f"**{game_name}** a été ajouté à ta liste.", color=0x52B043)
     if cover_url:
@@ -457,12 +396,54 @@ async def ajouter_jeu(interaction: discord.Interaction, nom: str):
     embed.set_footer(text="Utilise /ajouter_heures pour ajouter tes heures existantes")
     await interaction.followup.send(embed=embed)
 
-# ─── /ajouter_heures ──────────────────────────────────────────────────────────
+# ─── /ajouter_heures (avec confirmation) ──────────────────────────────────────
+class ConfirmView(discord.ui.View):
+    def __init__(self, user_id, username, game_name, cover_url, minutes):
+        super().__init__(timeout=30)
+        self.user_id   = user_id
+        self.username  = username
+        self.game_name = game_name
+        self.cover_url = cover_url
+        self.minutes   = minutes
+
+    @discord.ui.button(label="✅ Oui c'est ça !", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        now = datetime.utcnow().isoformat()
+        conn = db()
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO sessions (user_id, username, game, start_time, end_time, duration_minutes)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (self.user_id, self.username, self.game_name, now, now, self.minutes))
+        conn.commit()
+        c.execute("SELECT SUM(duration_minutes) FROM sessions WHERE user_id = ? AND game = ?", (self.user_id, self.game_name))
+        total = c.fetchone()[0] or 0
+        conn.close()
+
+        embed = discord.Embed(
+            title="✅ Heures ajoutées !",
+            description=f"**+{self.minutes/60:.1f}h** ajoutées à **{self.game_name}**",
+            color=0x52B043
+        )
+        if self.cover_url:
+            embed.set_thumbnail(url=self.cover_url)
+        embed.add_field(name="⏱ Total maintenant", value=f"**{total/60:.1f}h**")
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    @discord.ui.button(label="❌ Non mauvais jeu", style=discord.ButtonStyle.danger)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="❌ Annulé",
+            description="Aucune heure ajoutée. Réessaie avec un nom plus précis.",
+            color=0xFF0000
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
 @tree.command(name="ajouter_heures", description="Ajoute des heures manuellement à un jeu")
 @app_commands.describe(jeu="Nom du jeu", heures="Nombre d'heures à ajouter (ex: 40)")
 async def ajouter_heures(interaction: discord.Interaction, jeu: str, heures: float):
     await interaction.response.defer()
-    user_id = str(interaction.user.id)
+    user_id  = str(interaction.user.id)
     username = interaction.user.display_name
 
     if heures <= 0 or heures > 10000:
@@ -470,9 +451,8 @@ async def ajouter_heures(interaction: discord.Interaction, jeu: str, heures: flo
         return
 
     minutes = heures * 60
-    rawg_key = os.getenv("RAWG_KEY", "")
 
-    # Cherche le jeu dans game_info
+    # Cherche le jeu dans game_info puis sessions puis RAWG
     conn = db()
     c = conn.cursor()
     c.execute("SELECT game, cover_url FROM game_info WHERE user_id = ? AND LOWER(game) LIKE LOWER(?)", (user_id, f"%{jeu}%"))
@@ -482,33 +462,16 @@ async def ajouter_heures(interaction: discord.Interaction, jeu: str, heures: flo
     if info:
         game_name, cover_url = info
     else:
-        # Cherche dans les sessions existantes
         conn = db()
         c = conn.cursor()
         c.execute("SELECT DISTINCT game FROM sessions WHERE user_id = ? AND LOWER(game) LIKE LOWER(?)", (user_id, f"%{jeu}%"))
         row = c.fetchone()
         conn.close()
-
         if row:
             game_name = row[0]
             cover_url = None
         else:
-            # Jeu inconnu : cherche sur RAWG et crée l'entrée
-            game_name = jeu
-            cover_url = None
-            try:
-                url = f"https://api.rawg.io/api/games?key={rawg_key}&search={jeu}&page_size=1"
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            results = data.get("results", [])
-                            if results:
-                                game_name = results[0]["name"]
-                                cover_url = results[0].get("background_image")
-            except Exception:
-                pass
-
+            game_name, cover_url = await fetch_game_info(jeu)
             conn = db()
             c = conn.cursor()
             c.execute("""
@@ -518,24 +481,73 @@ async def ajouter_heures(interaction: discord.Interaction, jeu: str, heures: flo
             conn.commit()
             conn.close()
 
-    # Ajoute la session manuelle
-    now = datetime.utcnow().isoformat()
-    conn = db()
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO sessions (user_id, username, game, start_time, end_time, duration_minutes)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (user_id, username, game_name, now, now, minutes))
-    conn.commit()
-    c.execute("SELECT SUM(duration_minutes) FROM sessions WHERE user_id = ? AND game = ?", (user_id, game_name))
-    total = c.fetchone()[0] or 0
-    conn.close()
-
-    embed = discord.Embed(title="✅ Heures ajoutées !", description=f"**+{heures}h** ajoutées à **{game_name}**", color=0x52B043)
+    # Message de confirmation avec boutons
+    embed = discord.Embed(
+        title="❓ Confirmation",
+        description=f"Tu veux ajouter **{heures}h** à ce jeu ?\n\n🎮 **{game_name}**",
+        color=0xFFA500
+    )
     if cover_url:
         embed.set_thumbnail(url=cover_url)
-    embed.add_field(name="⏱ Total maintenant", value=f"**{total/60:.1f}h**", inline=True)
-    await interaction.followup.send(embed=embed)
+
+    view = ConfirmView(user_id, username, game_name, cover_url, minutes)
+    await interaction.followup.send(embed=embed, view=view)
+
+# ─── /supprimer_jeu ───────────────────────────────────────────────────────────
+class ConfirmDeleteView(discord.ui.View):
+    def __init__(self, user_id, game_name):
+        super().__init__(timeout=30)
+        self.user_id   = user_id
+        self.game_name = game_name
+
+    @discord.ui.button(label="✅ Oui supprimer", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        conn = db()
+        c = conn.cursor()
+        c.execute("DELETE FROM sessions WHERE user_id = ? AND game = ?", (self.user_id, self.game_name))
+        c.execute("DELETE FROM game_info WHERE user_id = ? AND game = ?", (self.user_id, self.game_name))
+        c.execute("DELETE FROM active_sessions WHERE user_id = ? AND game = ?", (self.user_id, self.game_name))
+        conn.commit()
+        conn.close()
+
+        embed = discord.Embed(
+            title="🗑️ Jeu supprimé",
+            description=f"**{self.game_name}** et toutes ses heures ont été supprimés.",
+            color=0xFF0000
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    @discord.ui.button(label="❌ Annuler", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(title="❌ Annulé", description="Aucune suppression effectuée.", color=0x888888)
+        await interaction.response.edit_message(embed=embed, view=None)
+
+@tree.command(name="supprimer_jeu", description="Supprime un jeu et toutes ses heures")
+@app_commands.describe(nom="Nom du jeu à supprimer")
+async def supprimer_jeu(interaction: discord.Interaction, nom: str):
+    user_id = str(interaction.user.id)
+
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT game FROM game_info WHERE user_id = ? AND LOWER(game) LIKE LOWER(?)", (user_id, f"%{nom}%"))
+    info = c.fetchone()
+    if not info:
+        c.execute("SELECT DISTINCT game FROM sessions WHERE user_id = ? AND LOWER(game) LIKE LOWER(?)", (user_id, f"%{nom}%"))
+        info = c.fetchone()
+    conn.close()
+
+    if not info:
+        await interaction.response.send_message(f"❌ Aucun jeu trouvé pour **{nom}**.", ephemeral=True)
+        return
+
+    game_name = info[0]
+    embed = discord.Embed(
+        title="⚠️ Confirmation suppression",
+        description=f"Tu veux vraiment supprimer **{game_name}** et **toutes ses heures** ?",
+        color=0xFF0000
+    )
+    view = ConfirmDeleteView(user_id, game_name)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # ─── LANCEMENT ────────────────────────────────────────────────────────────────
 bot.run(TOKEN)
